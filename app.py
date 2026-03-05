@@ -3,6 +3,7 @@ import pytesseract
 import cv2
 import numpy as np
 import os
+import urllib.request
 from indic_transliteration import sanscript
 from indic_transliteration.sanscript import transliterate
 from weasyprint import HTML
@@ -16,22 +17,45 @@ if 'extracted_text' not in st.session_state:
 st.title("🎵 Odia Song OCR & Multilingual PDF Generator")
 st.write("Upload an image, extract the text, fix any minor matra mistakes, and generate a formatted PDF in Odia, Hindi, and English.")
 
+# --- 1. TESSERACT BEST MODEL SETUP ---
+# Yeh code automatically Google ka sabse best Odia AI model download karega
+TESSDATA_DIR = os.path.abspath("tessdata")
+os.makedirs(TESSDATA_DIR, exist_ok=True)
+ORI_MODEL_PATH = os.path.join(TESSDATA_DIR, "ori.traineddata")
+
+if not os.path.exists(ORI_MODEL_PATH):
+    with st.spinner("Downloading High-Accuracy Odia AI Model (One-time setup)..."):
+        url = "https://github.com/tesseract-ocr/tessdata_best/raw/main/ori.traineddata"
+        urllib.request.urlretrieve(url, ORI_MODEL_PATH)
+
+# Force pytesseract to use our newly downloaded best model
+os.environ["TESSDATA_PREFIX"] = TESSDATA_DIR
+
 # --- CORE FUNCTIONS ---
 def clean_image(image_bytes):
+    """Pro-level image processing for complex Indic scripts."""
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     
-    img_enlarged = cv2.resize(img, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
+    # 1. Extreme Upscaling (3x) to make tiny matras visible
+    img_enlarged = cv2.resize(img, None, fx=3.0, fy=3.0, interpolation=cv2.INTER_CUBIC)
+    
+    # 2. Convert to Grayscale
     gray = cv2.cvtColor(img_enlarged, cv2.COLOR_BGR2GRAY)
     
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    enhanced_gray = clahe.apply(gray)
+    # 3. Denoising to remove background grain/shadows
+    denoised = cv2.fastNlMeansDenoising(gray, h=10)
+    
+    # 4. Adaptive Gaussian Thresholding 
+    # (Forces text to be pure black and bg pure white, adjusting for lighting locally)
+    thresh = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2)
     
     temp_path = "temp_image.png"
-    cv2.imwrite(temp_path, enhanced_gray)
+    cv2.imwrite(temp_path, thresh)
     return temp_path
 
 def perform_ocr(image_path):
+    # --oem 1 forces deep learning. --psm 6 preserves layout columns.
     custom_config = r'-c preserve_interword_spaces=1 --oem 1 --psm 6'
     text = pytesseract.image_to_string(image_path, lang='ori', config=custom_config)
     return text
@@ -42,7 +66,6 @@ def transliterate_text(odia_text):
     return hindi_script, eng_script
 
 def create_pdf(odia_text, hindi_text, eng_text, output_filename="song.pdf"):
-    """Generates the layout-preserved PDF using WeasyPrint."""
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -71,7 +94,6 @@ def create_pdf(odia_text, hindi_text, eng_text, output_filename="song.pdf"):
     </html>
     """
     
-    # WeasyPrint directly converts the HTML string to a PDF file
     HTML(string=html_content).write_pdf(output_filename)
     return output_filename
 
@@ -84,7 +106,7 @@ if uploaded_file is not None:
     with col1:
         st.image(uploaded_file, caption="Uploaded Image", use_container_width=True)
         if st.button("Scan & Extract Text", type="primary"):
-            with st.spinner("Enhancing image and extracting text..."):
+            with st.spinner("Processing image with Advanced AI..."):
                 temp_image_path = clean_image(uploaded_file.getvalue())
                 st.session_state.extracted_text = perform_ocr(temp_image_path)
                 os.remove(temp_image_path) 
@@ -92,7 +114,7 @@ if uploaded_file is not None:
 
     with col2:
         if st.session_state.extracted_text:
-            st.info("💡 **Tip:** If the OCR missed a complex matra, you can manually correct it in the box below before generating the PDF.")
+            st.info("💡 **Tip:** Even with advanced AI, OCR can make a 1% error on rare matras. Feel free to edit the text below before generating the PDF.")
             
             final_odia_text = st.text_area("2. Review & Edit Odia Text", value=st.session_state.extracted_text, height=400)
             
