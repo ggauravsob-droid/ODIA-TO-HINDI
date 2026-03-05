@@ -1,0 +1,7 @@
+streamlit
+pytesseract
+Pillow
+indic-transliteration
+pdfkit
+opencv-python-headless
+numpy
