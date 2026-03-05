@@ -2,15 +2,14 @@ import streamlit as st
 import pytesseract
 import cv2
 import numpy as np
-import pdfkit
 import os
 from indic_transliteration import sanscript
 from indic_transliteration.sanscript import transliterate
+from weasyprint import HTML
 
 # --- APP CONFIG & SESSION STATE ---
 st.set_page_config(page_title="Odia Song OCR & Translator", layout="wide")
 
-# Session state to hold our text so it doesn't disappear when typing
 if 'extracted_text' not in st.session_state:
     st.session_state.extracted_text = ""
 
@@ -19,17 +18,12 @@ st.write("Upload an image, extract the text, fix any minor matra mistakes, and g
 
 # --- CORE FUNCTIONS ---
 def clean_image(image_bytes):
-    """Advanced image processing to preserve tiny matras and complex Odia conjuncts."""
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     
-    # 1. Upscale the image by 2.5x to make tiny details larger for the OCR
     img_enlarged = cv2.resize(img, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
-    
-    # 2. Convert to Grayscale
     gray = cv2.cvtColor(img_enlarged, cv2.COLOR_BGR2GRAY)
     
-    # 3. Apply CLAHE (Smart contrast boost) to keep thin strokes visible
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
     enhanced_gray = clahe.apply(gray)
     
@@ -38,8 +32,6 @@ def clean_image(image_bytes):
     return temp_path
 
 def perform_ocr(image_path):
-    """Extracts Odia text using the Neural Network LSTM engine."""
-    # --oem 1 forces Deep Learning LSTM model. preserve_interword_spaces keeps the layout.
     custom_config = r'-c preserve_interword_spaces=1 --oem 1 --psm 6'
     text = pytesseract.image_to_string(image_path, lang='ori', config=custom_config)
     return text
@@ -50,7 +42,7 @@ def transliterate_text(odia_text):
     return hindi_script, eng_script
 
 def create_pdf(odia_text, hindi_text, eng_text, output_filename="song.pdf"):
-    """Generates the layout-preserved PDF."""
+    """Generates the layout-preserved PDF using WeasyPrint."""
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -58,9 +50,10 @@ def create_pdf(odia_text, hindi_text, eng_text, output_filename="song.pdf"):
         <meta charset="UTF-8">
         <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari&family=Noto+Sans+Oriya&family=Noto+Sans&display=swap" rel="stylesheet">
         <style>
-            body {{ padding: 20px; font-family: 'Noto Sans', sans-serif; }}
-            h2 {{ color: #333; border-bottom: 2px solid #ddd; padding-bottom: 5px; }}
-            .text-block {{ white-space: pre-wrap; font-size: 16px; line-height: 1.5; margin-bottom: 40px; }}
+            @page {{ size: A4; margin: 2cm; }}
+            body {{ font-family: 'Noto Sans', sans-serif; }}
+            h2 {{ color: #333; border-bottom: 2px solid #ddd; padding-bottom: 5px; margin-top: 30px; }}
+            .text-block {{ white-space: pre-wrap; font-size: 14px; line-height: 1.5; }}
             .odia-text {{ font-family: 'Noto Sans Oriya', sans-serif; }}
             .hindi-text {{ font-family: 'Noto Sans Devanagari', sans-serif; }}
         </style>
@@ -78,13 +71,8 @@ def create_pdf(odia_text, hindi_text, eng_text, output_filename="song.pdf"):
     </html>
     """
     
-    options = {
-        'encoding': "UTF-8",
-        'enable-local-file-access': None,
-        'quiet': ''
-    }
-    
-    pdfkit.from_string(html_content, output_filename, options=options)
+    # WeasyPrint directly converts the HTML string to a PDF file
+    HTML(string=html_content).write_pdf(output_filename)
     return output_filename
 
 # --- UI WORKFLOW ---
@@ -99,14 +87,13 @@ if uploaded_file is not None:
             with st.spinner("Enhancing image and extracting text..."):
                 temp_image_path = clean_image(uploaded_file.getvalue())
                 st.session_state.extracted_text = perform_ocr(temp_image_path)
-                os.remove(temp_image_path) # Cleanup
+                os.remove(temp_image_path) 
                 st.success("Scan Complete! Please review the text on the right.")
 
     with col2:
         if st.session_state.extracted_text:
-            st.info("💡 **Tip:** If the OCR missed a complex matra (like 'pra' or 'nda'), you can manually correct it in the box below before generating the PDF.")
+            st.info("💡 **Tip:** If the OCR missed a complex matra, you can manually correct it in the box below before generating the PDF.")
             
-            # User can edit the OCR output here!
             final_odia_text = st.text_area("2. Review & Edit Odia Text", value=st.session_state.extracted_text, height=400)
             
             if st.button("3. Translate & Download PDF", type="primary"):
@@ -124,4 +111,4 @@ if uploaded_file is not None:
                             type="primary",
                             use_container_width=True
                         )
-                    os.remove(pdf_file) # Cleanup
+                    os.remove(pdf_file)
