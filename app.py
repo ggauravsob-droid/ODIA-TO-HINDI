@@ -11,14 +11,16 @@ from weasyprint import HTML
 # --- APP CONFIG & SESSION STATE ---
 st.set_page_config(page_title="Odia Song OCR & Translator", layout="wide")
 
+# Streamlit Memory (Session State)
 if 'extracted_text' not in st.session_state:
     st.session_state.extracted_text = ""
+if 'pdf_data' not in st.session_state:
+    st.session_state.pdf_data = None
 
 st.title("🎵 Odia Song OCR & Multilingual PDF Generator")
 st.write("Upload an image, extract the text, fix any minor matra mistakes, and generate a formatted PDF in Odia, Hindi, and English.")
 
 # --- 1. TESSERACT BEST MODEL SETUP ---
-# Yeh code automatically Google ka sabse best Odia AI model download karega
 TESSDATA_DIR = os.path.abspath("tessdata")
 os.makedirs(TESSDATA_DIR, exist_ok=True)
 ORI_MODEL_PATH = os.path.join(TESSDATA_DIR, "ori.traineddata")
@@ -28,26 +30,16 @@ if not os.path.exists(ORI_MODEL_PATH):
         url = "https://github.com/tesseract-ocr/tessdata_best/raw/main/ori.traineddata"
         urllib.request.urlretrieve(url, ORI_MODEL_PATH)
 
-# Force pytesseract to use our newly downloaded best model
 os.environ["TESSDATA_PREFIX"] = TESSDATA_DIR
 
 # --- CORE FUNCTIONS ---
 def clean_image(image_bytes):
-    """Pro-level image processing for complex Indic scripts."""
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     
-    # 1. Extreme Upscaling (3x) to make tiny matras visible
     img_enlarged = cv2.resize(img, None, fx=3.0, fy=3.0, interpolation=cv2.INTER_CUBIC)
-    
-    # 2. Convert to Grayscale
     gray = cv2.cvtColor(img_enlarged, cv2.COLOR_BGR2GRAY)
-    
-    # 3. Denoising to remove background grain/shadows
     denoised = cv2.fastNlMeansDenoising(gray, h=10)
-    
-    # 4. Adaptive Gaussian Thresholding 
-    # (Forces text to be pure black and bg pure white, adjusting for lighting locally)
     thresh = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2)
     
     temp_path = "temp_image.png"
@@ -55,7 +47,6 @@ def clean_image(image_bytes):
     return temp_path
 
 def perform_ocr(image_path):
-    # --oem 1 forces deep learning. --psm 6 preserves layout columns.
     custom_config = r'-c preserve_interword_spaces=1 --oem 1 --psm 6'
     text = pytesseract.image_to_string(image_path, lang='ori', config=custom_config)
     return text
@@ -93,7 +84,6 @@ def create_pdf(odia_text, hindi_text, eng_text, output_filename="song.pdf"):
     </body>
     </html>
     """
-    
     HTML(string=html_content).write_pdf(output_filename)
     return output_filename
 
@@ -110,27 +100,35 @@ if uploaded_file is not None:
                 temp_image_path = clean_image(uploaded_file.getvalue())
                 st.session_state.extracted_text = perform_ocr(temp_image_path)
                 os.remove(temp_image_path) 
+                # Reset old PDF if user scans a new image
+                st.session_state.pdf_data = None 
                 st.success("Scan Complete! Please review the text on the right.")
 
     with col2:
         if st.session_state.extracted_text:
-            st.info("💡 **Tip:** Even with advanced AI, OCR can make a 1% error on rare matras. Feel free to edit the text below before generating the PDF.")
+            st.info("💡 **Tip:** Edit the text below if you spot any missing matras before generating the PDF.")
             
             final_odia_text = st.text_area("2. Review & Edit Odia Text", value=st.session_state.extracted_text, height=400)
             
-            if st.button("3. Translate & Download PDF", type="primary"):
+            # Step 1: Create PDF Button
+            if st.button("3. Create Translation & PDF"):
                 with st.spinner("Translating and formatting PDF..."):
                     hindi_text, eng_text = transliterate_text(final_odia_text)
-                    
                     pdf_file = create_pdf(final_odia_text, hindi_text, eng_text)
                     
+                    # Save PDF to memory so it doesn't disappear
                     with open(pdf_file, "rb") as pdf:
-                        st.download_button(
-                            label="⬇️ Download Final PDF",
-                            data=pdf,
-                            file_name="Translated_Song.pdf",
-                            mime="application/pdf",
-                            type="primary",
-                            use_container_width=True
-                        )
+                        st.session_state.pdf_data = pdf.read()
                     os.remove(pdf_file)
+            
+            # Step 2: Persistent Download Button
+            if st.session_state.pdf_data is not None:
+                st.success("✅ PDF is Ready!")
+                st.download_button(
+                    label="⬇️ Click Here to Download Final PDF",
+                    data=st.session_state.pdf_data,
+                    file_name="Translated_Song.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                    use_container_width=True
+                )
